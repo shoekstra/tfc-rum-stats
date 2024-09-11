@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/hashicorp/go-tfe"
 )
@@ -52,19 +53,20 @@ func main() {
 	totalResources := 0
 
 	records := [][]string{
-		{"Organization", "Workspace", "Resource Count"},
+		{"Organization", "Workspace", "Resource Count", "Billable Resource Count"},
 	}
 
 	for _, org := range orgs.Items {
 		if verbose {
-			log.Println("Processing org: ", org.Name)
+			log.Println("Processing org:", org.Name)
 		}
 
 		allWorkspacesWithResources := 0
 		allOrgResources := []int{}
+		allOrgBillableResources := []int{}
 
 		// Get workspaces in org
-		workspaces, err := getAllWorkspaces(context.Background(), client, org.Name)
+		workspaces, err := getWorkspaces(context.Background(), client, org.Name)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -75,10 +77,27 @@ func main() {
 		}
 
 		for _, w := range workspaces {
+			if verbose {
+				log.Println("Processing workspace:", w.Name)
+			}
+
+			resources := getResources(context.Background(), client, w.ID)
+
+			billableResourceCount := 0
+
+			// Exclude data sources and null resources
+			for _, r := range resources {
+				if strings.HasPrefix(r.ProviderType, "data.") || strings.HasPrefix(r.ProviderType, "null_resource.") {
+					continue
+				}
+				billableResourceCount++
+			}
+
 			records = append(records, []string{
 				org.Name,
 				w.Name,
 				strconv.Itoa(w.ResourceCount),
+				strconv.Itoa(billableResourceCount),
 			})
 
 			if w.ResourceCount > 0 {
@@ -86,13 +105,15 @@ func main() {
 			}
 
 			allOrgResources = append(allOrgResources, w.ResourceCount)
+			allOrgBillableResources = append(allOrgBillableResources, billableResourceCount)
 		}
 
 		// Print stats per org
-		log.Printf("Org: %s, Workspaces: %d, RUM: %d, Average RUM per used workspace: %d, Top 10 workspaces RUM: %d, Top 20 workspaces RUM: %d\n",
+		log.Printf("Org: %s, Workspaces: %d, RUM: %d, Billable RUM: %d, Average RUM per used workspace: %d, Top 10 workspaces RUM: %d, Top 20 workspaces RUM: %d\n",
 			org.Name,
 			len(workspaces),
 			sumInts(allOrgResources),
+			sumInts(allOrgBillableResources),
 			sumInts(allOrgResources)/allWorkspacesWithResources,
 			average(top(allOrgResources, 10)),
 			average(top(allOrgResources, 20)),
@@ -121,8 +142,44 @@ func main() {
 	}
 }
 
-// create function to loop over paginated results and return variable with all results
-func getAllWorkspaces(ctx context.Context, client *tfe.Client, orgName string) ([]*tfe.Workspace, error) {
+// getResources returns all resources in a workspace
+func getResources(ctx context.Context, client *tfe.Client, workspaceID string) []*tfe.WorkspaceResource {
+	var allResources []*tfe.WorkspaceResource
+
+	opts := &tfe.WorkspaceResourceListOptions{
+		ListOptions: tfe.ListOptions{
+			PageSize: 50,
+		},
+	}
+
+	for {
+		resources, err := client.WorkspaceResources.List(ctx, workspaceID, opts)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if len(resources.Items) == 0 {
+			break
+		}
+
+		allResources = append(allResources, resources.Items...)
+
+		if verbose {
+			log.Println("Fetched resource page:", resources.Pagination.CurrentPage, "of", resources.Pagination.TotalPages)
+		}
+
+		if resources.Pagination.NextPage == 0 || resources.Pagination.CurrentPage == resources.Pagination.TotalPages {
+			break
+		}
+
+		opts.PageNumber = resources.Pagination.NextPage
+	}
+
+	return allResources
+}
+
+// getWorkspaces returns all workspaces in an organization
+func getWorkspaces(ctx context.Context, client *tfe.Client, orgName string) ([]*tfe.Workspace, error) {
 	var allWorkspaces []*tfe.Workspace
 
 	opts := &tfe.WorkspaceListOptions{
@@ -141,11 +198,11 @@ func getAllWorkspaces(ctx context.Context, client *tfe.Client, orgName string) (
 			break
 		}
 
-		if verbose {
-			log.Println("Fetched page: ", ws.Pagination.CurrentPage, " of ", ws.Pagination.TotalPages)
-		}
-
 		allWorkspaces = append(allWorkspaces, ws.Items...)
+
+		if verbose {
+			log.Println("Fetched page:", ws.Pagination.CurrentPage, "of", ws.Pagination.TotalPages)
+		}
 
 		if ws.Pagination.NextPage == 0 || ws.Pagination.CurrentPage == ws.Pagination.TotalPages {
 			break
