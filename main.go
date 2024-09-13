@@ -8,14 +8,15 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/hashicorp/go-tfe"
 )
 
-var all bool
-var name string
-var verbose bool
+var (
+	all     bool
+	name    string
+	verbose bool
+)
 
 func main() {
 	flag.BoolVar(&all, "all", false, "Fetch all organizations")
@@ -81,23 +82,17 @@ func main() {
 				log.Println("Processing workspace:", w.Name)
 			}
 
-			resources := getResources(context.Background(), client, w.ID)
-
 			billableResourceCount := 0
-
-			// Exclude data sources and null resources
-			for _, r := range resources {
-				if strings.HasPrefix(r.ProviderType, "data.") || strings.HasPrefix(r.ProviderType, "null_resource.") {
-					continue
-				}
-				billableResourceCount++
+			if w.ResourceCount > 0 {
+				w.CurrentStateVersion, _ = client.StateVersions.ReadCurrent(context.Background(), w.ID)
+				billableResourceCount = int(w.CurrentStateVersion.BillableRUMCount)
 			}
 
 			records = append(records, []string{
 				org.Name,
 				w.Name,
 				strconv.Itoa(w.ResourceCount),
-				strconv.Itoa(billableResourceCount),
+				strconv.Itoa(int(billableResourceCount)),
 			})
 
 			if w.ResourceCount > 0 {
@@ -105,7 +100,7 @@ func main() {
 			}
 
 			allOrgResources = append(allOrgResources, w.ResourceCount)
-			allOrgBillableResources = append(allOrgBillableResources, billableResourceCount)
+			allOrgBillableResources = append(allOrgBillableResources, int(billableResourceCount))
 		}
 
 		// Print stats per org
