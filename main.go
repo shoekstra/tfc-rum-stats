@@ -85,7 +85,7 @@ func main() {
 			billableResourceCount := 0
 			if w.ResourceCount > 0 {
 				w.CurrentStateVersion, _ = client.StateVersions.ReadCurrent(context.Background(), w.ID)
-				billableResourceCount = int(w.CurrentStateVersion.BillableRUMCount)
+				billableResourceCount = int(*w.CurrentStateVersion.BillableRUMCount)
 			}
 
 			records = append(records, []string{
